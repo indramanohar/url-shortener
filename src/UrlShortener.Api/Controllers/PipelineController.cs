@@ -36,9 +36,11 @@ public class PipelineController(
         // Solution root so stages can invoke dotnet build / dotnet test
         context.Artifacts["solution_root"] = Directory.GetCurrentDirectory();
 
-        // Deliberate failure injection for retry→rollback demonstration
         if (request.InjectTestFailure)
             context.Artifacts["inject_test_failure"] = true;
+
+        if (request.SkipVulnScan)
+            context.Artifacts["skip_vuln_scan"] = true;
 
         // Fire and forget — pipeline runs on a background thread
         _ = Task.Run(async () =>
@@ -140,6 +142,41 @@ public class PipelineController(
         });
     }
 
+    [HttpGet("{id}/metrics")]
+    public IActionResult GetMetrics(Guid id)
+    {
+        var run = runStore.Get(id);
+        if (run == null) return NotFound();
+
+        var metrics = MetricsCalculator.Calculate(run.Id, run.Scenario, run.AuditLog.Entries);
+        return Ok(FormatMetrics(metrics));
+    }
+
+    [HttpGet("metrics")]
+    public IActionResult GetAggregateMetrics()
+    {
+        var runs = runStore.All().ToList();
+        if (runs.Count == 0) return Ok(new { message = "No pipeline runs recorded yet." });
+
+        var allMetrics = runs.Select(r =>
+            MetricsCalculator.Calculate(r.Id, r.Scenario, r.AuditLog.Entries)).ToList();
+
+        var completed = allMetrics.Where(m => m.EndToEndLatency.HasValue).ToList();
+
+        return Ok(new
+        {
+            runCount               = runs.Count,
+            completedCount         = runs.Count(r => r.Status == PipelineStatus.Completed),
+            avgSuccessRatePct      = allMetrics.Average(m => m.SuccessRatePercent).ToString("F1"),
+            avgRetryFrequency      = allMetrics.Average(m => m.RetryFrequency).ToString("F2"),
+            totalRollbacks         = allMetrics.Sum(m => m.TotalRollbacks),
+            avgEndToEndLatencySec  = completed.Count > 0
+                ? completed.Average(m => m.EndToEndLatency!.Value.TotalSeconds).ToString("F1")
+                : "N/A",
+            byRun = allMetrics.Select(FormatMetrics)
+        });
+    }
+
     [HttpGet]
     public IActionResult ListRuns() =>
         Ok(runStore.All().Select(r => new
@@ -150,6 +187,22 @@ public class PipelineController(
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt
         }));
+
+    private static object FormatMetrics(PipelineMetrics m) => new
+    {
+        runId                  = m.RunId,
+        scenario               = m.Scenario,
+        successRatePct         = m.SuccessRatePercent.ToString("F1"),
+        retryFrequency         = m.RetryFrequency.ToString("F2"),
+        totalRollbacks         = m.TotalRollbacks,
+        firstAttemptSuccesses  = m.FirstAttemptSuccesses,
+        totalStageRuns         = m.TotalStageRuns,
+        totalRetries           = m.TotalRetries,
+        mttrSeconds            = m.MeanTimeToRecovery.HasValue
+            ? m.MeanTimeToRecovery.Value.TotalSeconds.ToString("F1") : "N/A",
+        endToEndLatencySeconds = m.EndToEndLatency.HasValue
+            ? m.EndToEndLatency.Value.TotalSeconds.ToString("F1") : "N/A"
+    };
 }
 
-public record StartPipelineRequest(string Scenario, bool InjectTestFailure = false);
+public record StartPipelineRequest(string Scenario, bool InjectTestFailure = false, bool SkipVulnScan = false);
