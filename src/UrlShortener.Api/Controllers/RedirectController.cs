@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UrlShortener.Api.Services;
 
 namespace UrlShortener.Api.Controllers;
@@ -7,6 +8,7 @@ namespace UrlShortener.Api.Controllers;
 public class RedirectController(IUrlShortenerService svc) : ControllerBase
 {
     // 302 (not 301): 301 is cached by browsers, which silently breaks click analytics on repeat visits.
+    [EnableRateLimiting("redirect-per-ip")]
     [HttpGet("{code}")]
     public async Task<IActionResult> RedirectToUrl(string code)
     {

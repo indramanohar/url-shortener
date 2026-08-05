@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UrlShortener.Api.Services;
 using UrlShortener.Domain.DTOs;
 
@@ -7,6 +8,7 @@ namespace UrlShortener.Api.Controllers;
 [ApiController]
 public class UrlController(IUrlShortenerService svc) : ControllerBase
 {
+    [EnableRateLimiting("write-per-key")]
     [HttpPost("shorten")]
     public async Task<IActionResult> Shorten([FromBody] ShortenRequest request)
     {
@@ -28,6 +30,7 @@ public class UrlController(IUrlShortenerService svc) : ControllerBase
         }
     }
 
+    [EnableRateLimiting("write-per-key")]
     [HttpDelete("{code}")]
     public async Task<IActionResult> Delete(string code)
     {
