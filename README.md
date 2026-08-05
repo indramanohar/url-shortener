@@ -33,6 +33,8 @@ All write endpoints require `X-Api-Key: <your-key>` header. Redirects are anonym
 | `DELETE /{code}` | Required | Deactivate a link (soft delete, key-scoped). |
 | `GET /{code}/analytics` | None | Click count + timestamp series. |
 | `GET /health` | None | Liveness / DB reachability check. |
+| `GET /pipeline/{id}/metrics` | None | Four reliability metrics for a single run. |
+| `GET /pipeline/metrics` | None | Aggregate metrics across all runs. |
 
 **POST /shorten — example:**
 ```json
@@ -47,6 +49,7 @@ X-Api-Key: my-key
 - **302, not 301** — 301 is cached by browsers; repeat visits would skip click recording.
 - **Idempotent creation** — same URL + same alias returns the existing record, no duplicate.
 - **Soft delete** — `IsActive=false`; the row is retained so audit trails are preserved.
+- **Rate limiting** — write operations (POST/DELETE) are throttled per API key; redirects are throttled per client IP. Both limits are config-driven (`appsettings.json`) and return `429 + Retry-After` on breach.
 
 ---
 
@@ -70,6 +73,13 @@ Run any of the three SDLC scenarios through the full pipeline:
 POST /pipeline/run
 { "scenario": "greenfield", "injectTestFailure": true }
 ```
+
+**Skip vulnerability scan (accepted-risk bypass):**
+```json
+POST /pipeline/run
+{ "scenario": "greenfield", "skipVulnScan": true }
+```
+By default the Release entry gate runs `dotnet list package --vulnerable`. A detected CVE blocks release; `skipVulnScan: true` records the bypass decision in the audit log and proceeds.
 
 **Human approval flow:**
 1. `POST /pipeline/run` → returns `{ "runId": "...", "approveUrl": "/pipeline/{id}/approve" }`
@@ -108,6 +118,7 @@ Implementation with failure context attached, then re-runs Testing.
 | `PipelineOrchestrator` | Main loop: entry gate → execute → [human approval] → exit gate → retry / rollback / safe-stop. |
 | `PipelineApprovalService` | Singleton holding `TaskCompletionSource<bool>` per pending run. API endpoint calls `Resolve()` to unblock the orchestrator. |
 | `IPipelineStage` | Interface from `ARCHITECTURE.md`. Six implementations: Requirements, Design, Implementation, Testing, Documentation, Release. |
+| `MetricsCalculator` | Derives four reliability metrics from the audit log: stage success rate, retry frequency, MTTR, and end-to-end latency. |
 | `UrlShortenerService` | `IMemoryCache` in front of EF Core / SQLite; cache-miss fallback to DB. |
 
 ### Human-approval mechanism
@@ -139,18 +150,21 @@ Timeout default: 10 minutes. Configurable via `PipelineOrchestrator` constructor
 
 ```
 tests/
-  UrlShortener.Orchestration.Tests/   # 30 unit tests
-    AuditLogTests.cs       — hash chain correctness, tamper detection
-    RetryPolicyTests.cs    — exponential backoff timing
-    StageGateTests.cs      — entry/exit gate logic for all 6 stages
-    ApprovalServiceTests.cs — TCS resolve, timeout, HasPending lifecycle
+  UrlShortener.Orchestration.Tests/   # 42 unit tests
+    AuditLogTests.cs          — hash chain correctness, tamper detection
+    RetryPolicyTests.cs       — exponential backoff timing
+    StageGateTests.cs         — entry/exit gate logic for all 6 stages
+    ApprovalServiceTests.cs   — TCS resolve, timeout, HasPending lifecycle
+    MetricsCalculatorTests.cs — success rate, retry frequency, MTTR, latency
 
-  UrlShortener.Api.Tests/             # 13 integration tests
+  UrlShortener.Api.Tests/             # 18 integration tests
     UrlEndpointsTests.cs   — shorten/redirect/delete/analytics/health via
                              WebApplicationFactory + in-memory SQLite
+    RateLimitTests.cs      — 429 on breach, Retry-After header, independent
+                             key buckets, redirect throttle, health bypass
 ```
 
-Run: `dotnet test` (43 tests, all green)
+Run: `dotnet test` (60 tests, all green)
 
 ---
 
@@ -164,11 +178,11 @@ Run: `dotnet test` (43 tests, all green)
 | Approval persistence | In-memory TCS singleton | Durable approval record in DB + SignalR or polling |
 | Approval timeout | Safe-stop; pipeline must restart | Checkpoint resume from last completed stage |
 | Scale | Low-thousands creates/day | Sharded ID generation, geo-distributed cache at real scale |
+| Rate limiter window | Fixed window (simpler) | Sliding window avoids burst spikes at window boundaries |
 
 **Explicitly out of scope** (documented, not silently dropped):
 - Geo / device analytics breakdown
 - Multi-region / HA deployment
-- Rate limiting middleware (noted as STRETCH in `TASKS.md`)
 - Real Twitter-scale throughput
 
 ---
