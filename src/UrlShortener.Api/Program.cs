@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using UrlShortener.Api.Data;
 using UrlShortener.Api.Services;
+using UrlShortener.Orchestration.Core;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +15,15 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
     opt.UseSqlite(builder.Configuration.GetConnectionString("Default") ?? "Data Source=urlshortener.db"));
 
 builder.Services.AddScoped<IUrlShortenerService, UrlShortenerService>();
+
+// Orchestration engine — singletons so pipeline runs and approvals survive across requests
+builder.Services.AddSingleton<PipelineApprovalService>();
+builder.Services.AddSingleton<PipelineRunStore>();
+builder.Services.AddSingleton<PipelineOrchestrator>(sp =>
+{
+    var approval = sp.GetRequiredService<PipelineApprovalService>();
+    return new PipelineOrchestrator(approval);
+});
 
 var app = builder.Build();
 
