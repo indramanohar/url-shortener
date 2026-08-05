@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi.Models;
 using UrlShortener.Api.Data;
 using UrlShortener.Api.Services;
 using UrlShortener.Orchestration.Core;
@@ -9,7 +10,26 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
+    {
+        Name = "X-Api-Key",
+        Type = SecuritySchemeType.ApiKey,
+        In = ParameterLocation.Header,
+        Description = "API key required by most endpoints. Enter any non-empty string."
+    });
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 builder.Services.AddMemoryCache();
 
 // Trade-off: SQLite for 24-hr constraint. SQL Server swap = change provider + connection string.
