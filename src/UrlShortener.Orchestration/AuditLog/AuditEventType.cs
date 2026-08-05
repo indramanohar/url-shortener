@@ -13,5 +13,6 @@ public enum AuditEventType
     ApprovalDecision,
     ApprovalTimeout,
     SafeStop,
-    PipelineCompleted
+    PipelineCompleted,
+    Cancelled
 }

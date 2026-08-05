@@ -54,11 +54,6 @@ public class PipelineController(
                 run.Status = result.Status;
                 run.StoppedReason = result.StoppedReason;
             }
-            catch (OperationCanceledException)
-            {
-                run.Status = PipelineStatus.Cancelled;
-                run.StoppedReason = "Cancelled via POST /pipeline/{id}/cancel";
-            }
             catch (Exception ex)
             {
                 run.Status = PipelineStatus.SafeStopped;

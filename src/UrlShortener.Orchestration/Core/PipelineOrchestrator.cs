@@ -15,85 +15,99 @@ public class PipelineOrchestrator(
     {
         var log = context.AuditLog;
         var ct = context.CancellationToken;
+        var currentStage = "Initializing";
 
-        await log.AppendAsync(AuditEventType.PipelineStarted, "Pipeline",
-            $"Starting pipeline. Scenario={context.Scenario} RunId={context.RunId}");
-
-        // ── Sequential: Requirements → Design → Implementation ──
-        var sequential = new IPipelineStage[]
+        try
         {
-            new RequirementsStage(),
-            new DesignStage(),
-            new ImplementationStage()
-        };
+            await log.AppendAsync(AuditEventType.PipelineStarted, "Pipeline",
+                $"Starting pipeline. Scenario={context.Scenario} RunId={context.RunId}");
 
-        foreach (var stage in sequential)
-        {
-            ct.ThrowIfCancellationRequested();
-            var ok = await RunStageAsync(context, stage, ct);
-            if (!ok.Succeeded)
-                return await SafeStop(log, ok.FailureReason ?? $"{stage.Name} failed");
-        }
-
-        // ── Parallel branch: Testing ‖ Documentation ──
-        // Testing failure after max retries → rollback to Implementation (back-edge).
-        // Safe-stop if 2 rollbacks have been attempted (prevents infinite loops).
-        int rollbackCount = 0;
-        bool parallelPassed = false;
-
-        while (!parallelPassed)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var testingTask = RunStageWithRetryAsync(context, new TestingStage(), ct);
-            var docsTask = RunStageWithRetryAsync(context, new DocumentationStage(), ct);
-
-            // Real parallel execution via Task.WhenAll
-            var results = await Task.WhenAll(testingTask, docsTask);
-            var testingResult = results[0];
-            var docsResult = results[1];
-
-            if (testingResult.Succeeded && docsResult.Succeeded)
+            // ── Sequential: Requirements → Design → Implementation ──
+            var sequential = new IPipelineStage[]
             {
-                parallelPassed = true;
-            }
-            else if (!docsResult.Succeeded)
+                new RequirementsStage(),
+                new DesignStage(),
+                new ImplementationStage()
+            };
+
+            foreach (var stage in sequential)
             {
-                return await SafeStop(log, $"Documentation failed: {docsResult.FailureReason}");
-            }
-            else
-            {
-                // Testing exhausted retries → rollback
-                rollbackCount++;
-                if (rollbackCount > 1)
-                    return await SafeStop(log, "Testing failed after rollback; safe-stopping.");
-
-                await log.AppendAsync(AuditEventType.RolledBack, "Testing",
-                    $"Testing failed after {_retry.MaxAttempts} attempts. " +
-                    $"Rolling back to Implementation (rollback #{rollbackCount}). " +
-                    $"Failure context: {testingResult.FailureReason}",
-                    new Dictionary<string, string> { ["rollback_count"] = rollbackCount.ToString() });
-
-                context.Artifacts["testing_failure_context"] = testingResult.FailureReason ?? "unknown";
-
                 ct.ThrowIfCancellationRequested();
-                var rollbackImpl = await RunStageAsync(context, new ImplementationStage(), ct);
-                if (!rollbackImpl.Succeeded)
-                    return await SafeStop(log, $"Implementation (rollback) failed: {rollbackImpl.FailureReason}");
+                currentStage = stage.Name;
+                var ok = await RunStageAsync(context, stage, ct);
+                if (!ok.Succeeded)
+                    return await SafeStop(log, ok.FailureReason ?? $"{stage.Name} failed");
             }
+
+            // ── Parallel branch: Testing ‖ Documentation ──
+            // Testing failure after max retries → rollback to Implementation (back-edge).
+            // Safe-stop if 2 rollbacks have been attempted (prevents infinite loops).
+            int rollbackCount = 0;
+            bool parallelPassed = false;
+
+            while (!parallelPassed)
+            {
+                ct.ThrowIfCancellationRequested();
+                currentStage = "Testing‖Documentation";
+
+                var testingTask = RunStageWithRetryAsync(context, new TestingStage(), ct);
+                var docsTask = RunStageWithRetryAsync(context, new DocumentationStage(), ct);
+
+                // Real parallel execution via Task.WhenAll
+                var results = await Task.WhenAll(testingTask, docsTask);
+                var testingResult = results[0];
+                var docsResult = results[1];
+
+                if (testingResult.Succeeded && docsResult.Succeeded)
+                {
+                    parallelPassed = true;
+                }
+                else if (!docsResult.Succeeded)
+                {
+                    return await SafeStop(log, $"Documentation failed: {docsResult.FailureReason}");
+                }
+                else
+                {
+                    // Testing exhausted retries → rollback
+                    rollbackCount++;
+                    if (rollbackCount > 1)
+                        return await SafeStop(log, "Testing failed after rollback; safe-stopping.");
+
+                    await log.AppendAsync(AuditEventType.RolledBack, "Testing",
+                        $"Testing failed after {_retry.MaxAttempts} attempts. " +
+                        $"Rolling back to Implementation (rollback #{rollbackCount}). " +
+                        $"Failure context: {testingResult.FailureReason}",
+                        new Dictionary<string, string> { ["rollback_count"] = rollbackCount.ToString() });
+
+                    context.Artifacts["testing_failure_context"] = testingResult.FailureReason ?? "unknown";
+
+                    ct.ThrowIfCancellationRequested();
+                    currentStage = "Implementation (rollback)";
+                    var rollbackImpl = await RunStageAsync(context, new ImplementationStage(), ct);
+                    if (!rollbackImpl.Succeeded)
+                        return await SafeStop(log, $"Implementation (rollback) failed: {rollbackImpl.FailureReason}");
+                }
+            }
+
+            // ── Release gate (human approval) ──
+            ct.ThrowIfCancellationRequested();
+            currentStage = "Release";
+            var releaseResult = await RunStageAsync(context, new ReleaseStage(), ct);
+            if (!releaseResult.Succeeded)
+                return await SafeStop(log, releaseResult.FailureReason ?? "Release failed");
+
+            await log.AppendAsync(AuditEventType.PipelineCompleted, "Pipeline",
+                $"Pipeline completed successfully. Scenario={context.Scenario}",
+                new Dictionary<string, string> { ["rollback_count"] = rollbackCount.ToString() });
+
+            return PipelineRunResult.Completed();
         }
-
-        // ── Release gate (human approval) ──
-        ct.ThrowIfCancellationRequested();
-        var releaseResult = await RunStageAsync(context, new ReleaseStage(), ct);
-        if (!releaseResult.Succeeded)
-            return await SafeStop(log, releaseResult.FailureReason ?? "Release failed");
-
-        await log.AppendAsync(AuditEventType.PipelineCompleted, "Pipeline",
-            $"Pipeline completed successfully. Scenario={context.Scenario}",
-            new Dictionary<string, string> { ["rollback_count"] = rollbackCount.ToString() });
-
-        return PipelineRunResult.Completed();
+        catch (OperationCanceledException)
+        {
+            await log.AppendAsync(AuditEventType.Cancelled, "Pipeline",
+                $"Pipeline cancelled at stage: {currentStage}");
+            return PipelineRunResult.Cancelled($"Cancelled at stage: {currentStage}");
+        }
     }
 
     // ── Stage runner: entry gate → execute → [human approval if required] → exit gate ──
@@ -201,19 +215,21 @@ public class PipelineOrchestrator(
         var winner = await Task.WhenAny(tcs.Task, Task.Delay(_approvalTimeout, ct));
         approvalService.Remove(context.RunId);
 
-        if (winner != tcs.Task)
+        if (winner == tcs.Task)
         {
-            await context.AuditLog.AppendAsync(AuditEventType.ApprovalTimeout, stageName,
-                $"No decision received within {_approvalTimeout.TotalMinutes:F0} min — safe-stop triggered.");
-            return false;
+            bool approved = await tcs.Task;
+            await context.AuditLog.AppendAsync(AuditEventType.ApprovalDecision, stageName,
+                $"Human decision recorded: {(approved ? "APPROVED" : "REJECTED")}",
+                new Dictionary<string, string> { ["decision"] = approved ? "approved" : "rejected" });
+            return approved;
         }
 
-        bool approved = await tcs.Task;
-        await context.AuditLog.AppendAsync(AuditEventType.ApprovalDecision, stageName,
-            $"Human decision recorded: {(approved ? "APPROVED" : "REJECTED")}",
-            new Dictionary<string, string> { ["decision"] = approved ? "approved" : "rejected" });
+        // Distinguish cancellation from a natural timeout so the caller can rethrow correctly
+        ct.ThrowIfCancellationRequested();
 
-        return approved;
+        await context.AuditLog.AppendAsync(AuditEventType.ApprovalTimeout, stageName,
+            $"No decision received within {_approvalTimeout.TotalMinutes:F0} min — safe-stop triggered.");
+        return false;
     }
 
     private static async Task<PipelineRunResult> SafeStop(IAuditLog log, string reason)
