@@ -29,6 +29,7 @@ public class PipelineOrchestrator(
 
         foreach (var stage in sequential)
         {
+            ct.ThrowIfCancellationRequested();
             var ok = await RunStageAsync(context, stage, ct);
             if (!ok.Succeeded)
                 return await SafeStop(log, ok.FailureReason ?? $"{stage.Name} failed");
@@ -42,6 +43,8 @@ public class PipelineOrchestrator(
 
         while (!parallelPassed)
         {
+            ct.ThrowIfCancellationRequested();
+
             var testingTask = RunStageWithRetryAsync(context, new TestingStage(), ct);
             var docsTask = RunStageWithRetryAsync(context, new DocumentationStage(), ct);
 
@@ -73,6 +76,7 @@ public class PipelineOrchestrator(
 
                 context.Artifacts["testing_failure_context"] = testingResult.FailureReason ?? "unknown";
 
+                ct.ThrowIfCancellationRequested();
                 var rollbackImpl = await RunStageAsync(context, new ImplementationStage(), ct);
                 if (!rollbackImpl.Succeeded)
                     return await SafeStop(log, $"Implementation (rollback) failed: {rollbackImpl.FailureReason}");
@@ -80,6 +84,7 @@ public class PipelineOrchestrator(
         }
 
         // ── Release gate (human approval) ──
+        ct.ThrowIfCancellationRequested();
         var releaseResult = await RunStageAsync(context, new ReleaseStage(), ct);
         if (!releaseResult.Succeeded)
             return await SafeStop(log, releaseResult.FailureReason ?? "Release failed");

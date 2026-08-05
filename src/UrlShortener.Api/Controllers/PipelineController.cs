@@ -14,6 +14,8 @@ public class PipelineController(
     [HttpPost("run")]
     public IActionResult StartRun([FromBody] StartPipelineRequest request)
     {
+        if (GetApiKey() == null) return Unauthorized("X-Api-Key header is required.");
+
         if (string.IsNullOrWhiteSpace(request.Scenario))
             return BadRequest("scenario is required (greenfield | brownfield | ambiguous).");
 
@@ -30,7 +32,8 @@ public class PipelineController(
         {
             RunId = run.Id,
             Scenario = request.Scenario,
-            AuditLog = auditLog
+            AuditLog = auditLog,
+            CancellationToken = run.Cts.Token
         };
 
         // Solution root so stages can invoke dotnet build / dotnet test
@@ -51,6 +54,11 @@ public class PipelineController(
                 run.Status = result.Status;
                 run.StoppedReason = result.StoppedReason;
             }
+            catch (OperationCanceledException)
+            {
+                run.Status = PipelineStatus.Cancelled;
+                run.StoppedReason = "Cancelled via POST /pipeline/{id}/cancel";
+            }
             catch (Exception ex)
             {
                 run.Status = PipelineStatus.SafeStopped;
@@ -69,6 +77,7 @@ public class PipelineController(
             status = run.Status.ToString(),
             approveUrl = $"/pipeline/{run.Id}/approve",
             rejectUrl = $"/pipeline/{run.Id}/reject",
+            cancelUrl = $"/pipeline/{run.Id}/cancel",
             statusUrl = $"/pipeline/{run.Id}"
         });
     }
@@ -76,6 +85,8 @@ public class PipelineController(
     [HttpPost("{id}/approve")]
     public IActionResult Approve(Guid id)
     {
+        if (GetApiKey() == null) return Unauthorized("X-Api-Key header is required.");
+
         var run = runStore.Get(id);
         if (run == null) return NotFound();
 
@@ -89,6 +100,8 @@ public class PipelineController(
     [HttpPost("{id}/reject")]
     public IActionResult Reject(Guid id)
     {
+        if (GetApiKey() == null) return Unauthorized("X-Api-Key header is required.");
+
         var run = runStore.Get(id);
         if (run == null) return NotFound();
 
@@ -97,6 +110,21 @@ public class PipelineController(
 
         approvalService.Resolve(id, approved: false);
         return Ok(new { runId = id, decision = "rejected" });
+    }
+
+    [HttpPost("{id}/cancel")]
+    public IActionResult Cancel(Guid id)
+    {
+        if (GetApiKey() == null) return Unauthorized("X-Api-Key header is required.");
+
+        var run = runStore.Get(id);
+        if (run == null) return NotFound();
+
+        if (run.Status != PipelineStatus.Running)
+            return Conflict($"Run is not in a cancellable state (status: {run.Status}).");
+
+        run.Cts.Cancel();
+        return Ok(new { runId = id, status = "cancellation requested" });
     }
 
     [HttpGet("{id}")]
@@ -187,6 +215,10 @@ public class PipelineController(
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt
         }));
+
+    private string? GetApiKey() =>
+        Request.Headers.TryGetValue("X-Api-Key", out var v) && !string.IsNullOrWhiteSpace(v)
+            ? v.ToString() : null;
 
     private static object FormatMetrics(PipelineMetrics m) => new
     {

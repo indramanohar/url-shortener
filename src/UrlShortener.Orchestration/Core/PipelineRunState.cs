@@ -12,4 +12,5 @@ public class PipelineRunState
     public string? CurrentStage { get; set; }
     public DateTime StartedAt { get; init; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }
+    public CancellationTokenSource Cts { get; init; } = new();
 }

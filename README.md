@@ -55,6 +55,8 @@ X-Api-Key: my-key
 
 ## Orchestration Engine API
 
+All mutating pipeline endpoints (`/run`, `/approve`, `/reject`, `/cancel`) require `X-Api-Key: <your-key>`. Read endpoints are unauthenticated.
+
 Run any of the three SDLC scenarios through the full pipeline:
 
 | Endpoint | Description |
@@ -62,6 +64,7 @@ Run any of the three SDLC scenarios through the full pipeline:
 | `POST /pipeline/run` | Start a pipeline run. Body: `{ "scenario": "greenfield" }` |
 | `POST /pipeline/{id}/approve` | Approve a human-gate (Design or Release). |
 | `POST /pipeline/{id}/reject` | Reject a human-gate → safe-stop. |
+| `POST /pipeline/{id}/cancel` | Cancel a running pipeline mid-execution → `Cancelled` status. |
 | `GET /pipeline/{id}` | Status, current stage, abbreviated audit log. |
 | `GET /pipeline/{id}/audit` | Full audit log + chain integrity verification. |
 | `GET /pipeline` | List all pipeline runs. |

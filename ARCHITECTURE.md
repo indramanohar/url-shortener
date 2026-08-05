@@ -33,13 +33,18 @@ shipped. Testing/Documentation failures are cheap to retry automatically. That a
 what "controlled autonomy" means in practice — be ready to say this out loud.
 
 ## Retry / fallback / rollback / safe-stop
-- Each automated exit gate: max 3 retries, exponential backoff (2s, 4s, 8s).
+- **Testing and Documentation** exit gates: max 3 retries, exponential backoff (2s, 4s, 8s).
+- **Implementation** is intentionally not retried: a build failure is deterministic without a
+  code change, so retrying without new input wastes time. A failed build goes straight to
+  safe-stop (initial run) or triggers a safe-stop on rollback.
 - Testing fails after 3 retries -> **rollback**: re-queue Implementation with the failure
   output attached as context (the dashed edge above).
-- A human-approval stage rejected twice -> **safe-stop**: halt entirely, don't auto-retry an
+- A human-approval stage rejected -> **safe-stop**: halt entirely, don't auto-retry an
   explicit human "no."
-- Global kill switch: any stage can be paused mid-execution; state persists in
-  `PipelineContext` so it resumes rather than restarts.
+- **Global kill switch**: `POST /pipeline/{id}/cancel` signals a `CancellationTokenSource`
+  stored per run. The orchestrator checks `ct.ThrowIfCancellationRequested()` between every
+  stage transition; the run lands in `Cancelled` status and the audit log records the point
+  of interruption.
 
 ## Dynamic re-planning
 If Implementation discovers something that contradicts an already-approved Design decision
