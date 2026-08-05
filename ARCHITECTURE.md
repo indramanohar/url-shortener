@@ -69,6 +69,21 @@ only. Log every stage transition, retry, rollback, and human decision. This is t
 pattern already prototyped and tested in Python earlier in this project's design phase —
 translate the logic, don't redesign it from scratch.
 
+## Limitations — documented trade-offs, not silent gaps
+
+- **Human-approval service is single-instance and in-memory.** The `TaskCompletionSource`
+  held in `PipelineApprovalService` does not survive a process restart and cannot be shared
+  across multiple API instances. In a production system this would be a durable queue entry
+  (e.g., an Approval record in the DB polled or pushed via SignalR). Accepted under the
+  24-hour constraint.
+- **In-memory cache instead of Redis.** `IMemoryCache` is node-local and evicts on restart.
+  Production swap = replace with `IDistributedCache` + StackExchange.Redis, no logic change.
+- **SQLite instead of SQL Server.** Connection string + provider package swap only.
+- **Approval timeout triggers safe-stop.** If no human decision arrives within the configured
+  window (default 10 minutes), the orchestrator halts the pipeline and logs a timeout event
+  rather than proceeding. This prevents indefinite blocking but means the pipeline must be
+  re-run from scratch — a restart-from-checkpoint model is the production answer.
+
 ## Interface shape (contract for Claude Code to implement against)
 ```csharp
 public interface IPipelineStage
