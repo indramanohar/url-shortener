@@ -1,0 +1,1 @@
+{"runId":"0b99f769-a36a-4dde-89bf-51c360ea1225","scenario":"greenfield","successRatePct":"72.7","retryFrequency":"0.18","totalRollbacks":1,"firstAttemptSuccesses":7,"totalStageRuns":11,"totalRetries":2,"mttrSeconds":"1.2","endToEndLatencySeconds":"10.6"}

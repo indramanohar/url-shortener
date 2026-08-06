@@ -1,0 +1,5 @@
+HTTP/1.1 405 Method Not Allowed
+Date: Thu, 06 Aug 2026 02:58:20 GMT
+Server: Kestrel
+Allow: DELETE, GET
+
